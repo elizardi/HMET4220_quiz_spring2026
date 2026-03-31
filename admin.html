@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HMET4220 Quiz Dashboard</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f8f9fb; color: #111; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px; }
+  h1 { margin-bottom: 6px; }
+  .sub { color: #666; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; color: #666; font-weight: 600; }
+  .big { font-size: 28px; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px; border-bottom: 1px solid #f1f3f5; font-size: 14px; }
+  th { background: #f9fafb; font-weight: 600; }
+  .bar-row { margin: 8px 0; }
+  .bar-label { font-size: 13px; margin-bottom: 4px; }
+  .bar { background: #e5e7eb; border-radius: 999px; height: 14px; overflow: hidden; }
+  .fill { background: #4f46e5; height: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>HMET4220 Quiz Dashboard</h1>
+  <p class="sub">All-time anonymous analytics from Supabase quiz submissions.</p>
+
+  <div class="grid">
+    <div class="card"><h3>Total Attempts</h3><div id="totalAttempts" class="big">-</div></div>
+    <div class="card"><h3>Average Score</h3><div id="avgScore" class="big">-</div></div>
+    <div class="card"><h3>Average Percent</h3><div id="avgPct" class="big">-</div></div>
+  </div>
+
+  <h2>Per-question performance</h2>
+  <table>
+    <thead>
+      <tr><th>Question</th><th>Success Rate</th><th>Most Common Wrong Answer</th></tr>
+    </thead>
+    <tbody id="questionTable"></tbody>
+  </table>
+
+  <h2 style="margin-top:20px;">Score distribution (raw score)</h2>
+  <div id="histogram"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://ugamoeqhrdpjftgyjcux.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_JgCTuc_5AseK92WVtN5J7A_NZ6DjFLC';
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function loadDashboard() {
+  const { data, error } = await supabaseClient
+    .from('quiz_attempts')
+    .select('score,score_pct,total_questions,answers,submitted_at')
+    .order('submitted_at', { ascending: false });
+
+  if (error) {
+    alert(`Failed to load quiz data: ${error.message}`);
+    return;
+  }
+
+  renderSummary(data);
+  renderQuestionStats(data);
+  renderHistogram(data);
+}
+
+function renderSummary(attempts) {
+  const total = attempts.length;
+  const avgScore = total ? (attempts.reduce((s, a) => s + a.score, 0) / total).toFixed(2) : '0.00';
+  const avgPct = total ? (attempts.reduce((s, a) => s + a.score_pct, 0) / total).toFixed(1) : '0.0';
+
+  document.getElementById('totalAttempts').textContent = String(total);
+  document.getElementById('avgScore').textContent = avgScore;
+  document.getElementById('avgPct').textContent = `${avgPct}%`;
+}
+
+function renderQuestionStats(attempts) {
+  const byQuestion = new Map();
+
+  attempts.forEach(attempt => {
+    (attempt.answers || []).forEach(ans => {
+      if (!byQuestion.has(ans.question_id)) {
+        byQuestion.set(ans.question_id, { total: 0, correct: 0, wrongCounts: {} });
+      }
+      const stat = byQuestion.get(ans.question_id);
+      stat.total += 1;
+      if (ans.is_correct) {
+        stat.correct += 1;
+      } else {
+        const key = ans.selected_text || '(blank)';
+        stat.wrongCounts[key] = (stat.wrongCounts[key] || 0) + 1;
+      }
+    });
+  });
+
+  const tbody = document.getElementById('questionTable');
+  tbody.innerHTML = '';
+
+  [...byQuestion.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .forEach(([qid, stat]) => {
+      const success = stat.total ? ((stat.correct / stat.total) * 100).toFixed(1) : '0.0';
+      const wrongEntries = Object.entries(stat.wrongCounts).sort((a, b) => b[1] - a[1]);
+      const commonWrong = wrongEntries.length ? `${wrongEntries[0][0]} (${wrongEntries[0][1]})` : '—';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${qid}</td><td>${success}% (${stat.correct}/${stat.total})</td><td>${commonWrong}</td>`;
+      tbody.appendChild(tr);
+    });
+}
+
+function renderHistogram(attempts) {
+  const totalQuestions = attempts[0]?.total_questions || 10;
+  const buckets = new Map();
+  for (let i = 0; i <= totalQuestions; i++) buckets.set(i, 0);
+
+  attempts.forEach(a => {
+    if (buckets.has(a.score)) buckets.set(a.score, buckets.get(a.score) + 1);
+  });
+
+  const max = Math.max(1, ...buckets.values());
+  const root = document.getElementById('histogram');
+  root.innerHTML = '';
+
+  [...buckets.entries()].forEach(([score, count]) => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const width = (count / max) * 100;
+    row.innerHTML = `
+      <div class="bar-label">${score}/${totalQuestions} — ${count} attempt(s)</div>
+      <div class="bar"><div class="fill" style="width:${width}%"></div></div>
+    `;
+    root.appendChild(row);
+  });
+}
+
+loadDashboard();
+</script>
+</body>
+</html>
