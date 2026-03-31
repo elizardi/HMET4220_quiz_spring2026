@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HMET4220 Quiz Dashboard</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f8f9fb; color: #111; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  h1 { margin-bottom: 6px; }
+  .sub { color: #666; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; color: #666; font-weight: 600; }
+  .big { font-size: 28px; font-weight: 700; }
+  .performance-layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 14px; align-items: start; }
+  .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px; border-bottom: 1px solid #f1f3f5; font-size: 14px; }
+  th { background: #f9fafb; font-weight: 600; }
+  .bar-row { margin: 8px 0; }
+  .bar-label { font-size: 13px; margin-bottom: 4px; }
+  .bar { background: #e5e7eb; border-radius: 999px; height: 14px; overflow: hidden; }
+  .fill { background: #4f46e5; height: 100%; }
+  .toolbar { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
+  select { padding: 6px 8px; }
+  @media (max-width: 860px) {
+    .performance-layout { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>HMET4220 Quiz Dashboard</h1>
+  <p class="sub">All-time anonymous analytics from Supabase quiz submissions.</p>
+
+  <div class="grid">
+    <div class="card"><h3>Total Attempts</h3><div id="totalAttempts" class="big">-</div></div>
+    <div class="card"><h3>Average Score</h3><div id="avgScore" class="big">-</div></div>
+    <div class="card"><h3>Average Percent</h3><div id="avgPct" class="big">-</div></div>
+  </div>
+
+  <h2>Per-question performance</h2>
+  <div class="performance-layout">
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Success Rate</th><th>Most Common Wrong Answer</th></tr>
+        </thead>
+        <tbody id="questionTable"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <label for="questionSelect"><strong>Answer histogram for:</strong></label>
+        <select id="questionSelect"></select>
+      </div>
+      <div id="questionHistogram"></div>
+    </div>
+  </div>
+
+  <h2 style="margin-top:20px;">Score distribution (raw score)</h2>
+  <div id="histogram"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://ugamoeqhrdpjftgyjcux.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_JgCTuc_5AseK92WVtN5J7A_NZ6DjFLC';
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let allAttempts = [];
+
+async function loadDashboard() {
+  const { data, error } = await supabaseClient
+    .from('quiz_attempts')
+    .select('score,score_pct,total_questions,answers,submitted_at')
+    .order('submitted_at', { ascending: false });
+
+  if (error) {
+    alert(`Failed to load quiz data: ${error.message}`);
+    return;
+  }
+
+  allAttempts = data || [];
+  renderSummary(allAttempts);
+  renderQuestionStats(allAttempts);
+  setupQuestionSelector(allAttempts);
+  renderHistogram(allAttempts);
+}
+
+function renderSummary(attempts) {
+  const total = attempts.length;
+  const avgScore = total ? (attempts.reduce((s, a) => s + a.score, 0) / total).toFixed(2) : '0.00';
+  const avgPct = total ? (attempts.reduce((s, a) => s + a.score_pct, 0) / total).toFixed(1) : '0.0';
+
+  document.getElementById('totalAttempts').textContent = String(total);
+  document.getElementById('avgScore').textContent = avgScore;
+  document.getElementById('avgPct').textContent = `${avgPct}%`;
+}
+
+function renderQuestionStats(attempts) {
+  const byQuestion = getQuestionStats(attempts);
+  const tbody = document.getElementById('questionTable');
+  tbody.innerHTML = '';
+
+  [...byQuestion.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .forEach(([qid, stat]) => {
+      const success = stat.total ? ((stat.correct / stat.total) * 100).toFixed(1) : '0.0';
+      const wrongEntries = Object.entries(stat.wrongCounts).sort((a, b) => b[1] - a[1]);
+      const commonWrong = wrongEntries.length ? `${wrongEntries[0][0]} (${wrongEntries[0][1]})` : '—';
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${qid}</td><td>${success}% (${stat.correct}/${stat.total})</td><td>${commonWrong}</td>`;
+      tbody.appendChild(tr);
+    });
+}
+
+function getQuestionStats(attempts) {
+  const byQuestion = new Map();
+
+  attempts.forEach(attempt => {
+    (attempt.answers || []).forEach(ans => {
+      if (!byQuestion.has(ans.question_id)) {
+        byQuestion.set(ans.question_id, { total: 0, correct: 0, wrongCounts: {}, answerCounts: {} });
+      }
+      const stat = byQuestion.get(ans.question_id);
+      stat.total += 1;
+      if (ans.is_correct) stat.correct += 1;
+
+      const selected = ans.selected_text || '(blank)';
+      stat.answerCounts[selected] = (stat.answerCounts[selected] || 0) + 1;
+
+      if (!ans.is_correct) {
+        stat.wrongCounts[selected] = (stat.wrongCounts[selected] || 0) + 1;
+      }
+    });
+  });
+
+  return byQuestion;
+}
+
+function setupQuestionSelector(attempts) {
+  const select = document.getElementById('questionSelect');
+  const byQuestion = getQuestionStats(attempts);
+  const questionIds = [...byQuestion.keys()].sort((a, b) => Number(a) - Number(b));
+  select.innerHTML = '';
+
+  questionIds.forEach(qid => {
+    const opt = document.createElement('option');
+    opt.value = String(qid);
+    opt.textContent = `Question ${qid}`;
+    select.appendChild(opt);
+  });
+
+  select.onchange = () => renderQuestionAnswerHistogram(Number(select.value), attempts);
+  if (questionIds.length > 0) {
+    select.value = String(questionIds[0]);
+    renderQuestionAnswerHistogram(Number(select.value), attempts);
+  }
+}
+
+function renderQuestionAnswerHistogram(questionId, attempts) {
+  const rows = [];
+  attempts.forEach(attempt => {
+    (attempt.answers || []).forEach(ans => {
+      if (Number(ans.question_id) === Number(questionId)) {
+        rows.push(ans.selected_text || '(blank)');
+      }
+    });
+  });
+
+  const counts = {};
+  rows.forEach(r => { counts[r] = (counts[r] || 0) + 1; });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+  const max = Math.max(1, ...entries.map(([, c]) => c));
+  const root = document.getElementById('questionHistogram');
+  root.innerHTML = '';
+
+  if (!entries.length) {
+    root.textContent = 'No response data yet for this question.';
+    return;
+  }
+
+  entries.forEach(([answer, count]) => {
+    const width = (count / max) * 100;
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="bar-label">${answer} — ${count}</div>
+      <div class="bar"><div class="fill" style="width:${width}%"></div></div>
+    `;
+    root.appendChild(row);
+  });
+}
+
+function renderHistogram(attempts) {
+  const totalQuestions = attempts[0]?.total_questions || 10;
+  const buckets = new Map();
+  for (let i = 0; i <= totalQuestions; i++) buckets.set(i, 0);
+
+  attempts.forEach(a => {
+    if (buckets.has(a.score)) buckets.set(a.score, buckets.get(a.score) + 1);
+  });
+
+  const max = Math.max(1, ...buckets.values());
+  const root = document.getElementById('histogram');
+  root.innerHTML = '';
+
+  [...buckets.entries()].forEach(([score, count]) => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const width = (count / max) * 100;
+    row.innerHTML = `
+      <div class="bar-label">${score}/${totalQuestions} — ${count} attempt(s)</div>
+      <div class="bar"><div class="fill" style="width:${width}%"></div></div>
+    `;
+    root.appendChild(row);
+  });
+}
+
+loadDashboard();
+</script>
+</body>
+</html>
