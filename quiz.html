@@ -437,6 +437,16 @@ async function persistAttempt({ score, pct, answers }) {
     score,
     score_pct: pct,
     answers,
+    q1_selected: answers.find(a => a.question_id === 1)?.selected_text || null,
+    q2_selected: answers.find(a => a.question_id === 2)?.selected_text || null,
+    q3_selected: answers.find(a => a.question_id === 3)?.selected_text || null,
+    q4_selected: answers.find(a => a.question_id === 4)?.selected_text || null,
+    q5_selected: answers.find(a => a.question_id === 5)?.selected_text || null,
+    q6_selected: answers.find(a => a.question_id === 6)?.selected_text || null,
+    q7_selected: answers.find(a => a.question_id === 7)?.selected_text || null,
+    q8_selected: answers.find(a => a.question_id === 8)?.selected_text || null,
+    q9_selected: answers.find(a => a.question_id === 9)?.selected_text || null,
+    q10_selected: answers.find(a => a.question_id === 10)?.selected_text || null,
     submitted_at: new Date().toISOString()
   };
 

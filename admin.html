@@ -34,12 +34,24 @@
   </div>
 
   <h2>Per-question performance</h2>
-  <table>
-    <thead>
-      <tr><th>Question</th><th>Success Rate</th><th>Most Common Wrong Answer</th></tr>
-    </thead>
-    <tbody id="questionTable"></tbody>
-  </table>
+  <div class="performance-layout">
+    <div class="panel">
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Success Rate</th><th>Most Common Wrong Answer</th></tr>
+        </thead>
+        <tbody id="questionTable"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="toolbar">
+        <label for="questionSelect"><strong>Answer histogram for:</strong></label>
+        <select id="questionSelect"></select>
+      </div>
+      <div id="questionHistogram"></div>
+    </div>
+  </div>
 
   <h2 style="margin-top:20px;">Score distribution (raw score)</h2>
   <div id="histogram"></div>
@@ -50,6 +62,7 @@
 const SUPABASE_URL = 'https://ugamoeqhrdpjftgyjcux.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_JgCTuc_5AseK92WVtN5J7A_NZ6DjFLC';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let allAttempts = [];
 
 async function loadDashboard() {
   const { data, error } = await supabaseClient
@@ -62,9 +75,11 @@ async function loadDashboard() {
     return;
   }
 
-  renderSummary(data);
-  renderQuestionStats(data);
-  renderHistogram(data);
+  allAttempts = data || [];
+  renderSummary(allAttempts);
+  renderQuestionStats(allAttempts);
+  setupQuestionSelector(allAttempts);
+  renderHistogram(allAttempts);
 }
 
 function renderSummary(attempts) {
@@ -78,24 +93,7 @@ function renderSummary(attempts) {
 }
 
 function renderQuestionStats(attempts) {
-  const byQuestion = new Map();
-
-  attempts.forEach(attempt => {
-    (attempt.answers || []).forEach(ans => {
-      if (!byQuestion.has(ans.question_id)) {
-        byQuestion.set(ans.question_id, { total: 0, correct: 0, wrongCounts: {} });
-      }
-      const stat = byQuestion.get(ans.question_id);
-      stat.total += 1;
-      if (ans.is_correct) {
-        stat.correct += 1;
-      } else {
-        const key = ans.selected_text || '(blank)';
-        stat.wrongCounts[key] = (stat.wrongCounts[key] || 0) + 1;
-      }
-    });
-  });
-
+  const byQuestion = getQuestionStats(attempts);
   const tbody = document.getElementById('questionTable');
   tbody.innerHTML = '';
 
@@ -110,6 +108,85 @@ function renderQuestionStats(attempts) {
       tr.innerHTML = `<td>${qid}</td><td>${success}% (${stat.correct}/${stat.total})</td><td>${commonWrong}</td>`;
       tbody.appendChild(tr);
     });
+}
+
+function getQuestionStats(attempts) {
+  const byQuestion = new Map();
+
+  attempts.forEach(attempt => {
+    (attempt.answers || []).forEach(ans => {
+      if (!byQuestion.has(ans.question_id)) {
+        byQuestion.set(ans.question_id, { total: 0, correct: 0, wrongCounts: {}, answerCounts: {} });
+      }
+      const stat = byQuestion.get(ans.question_id);
+      stat.total += 1;
+      if (ans.is_correct) stat.correct += 1;
+
+      const selected = ans.selected_text || '(blank)';
+      stat.answerCounts[selected] = (stat.answerCounts[selected] || 0) + 1;
+
+      if (!ans.is_correct) {
+        stat.wrongCounts[selected] = (stat.wrongCounts[selected] || 0) + 1;
+      }
+    });
+  });
+
+  return byQuestion;
+}
+
+function setupQuestionSelector(attempts) {
+  const select = document.getElementById('questionSelect');
+  const byQuestion = getQuestionStats(attempts);
+  const questionIds = [...byQuestion.keys()].sort((a, b) => Number(a) - Number(b));
+  select.innerHTML = '';
+
+  questionIds.forEach(qid => {
+    const opt = document.createElement('option');
+    opt.value = String(qid);
+    opt.textContent = `Question ${qid}`;
+    select.appendChild(opt);
+  });
+
+  select.onchange = () => renderQuestionAnswerHistogram(Number(select.value), attempts);
+  if (questionIds.length > 0) {
+    select.value = String(questionIds[0]);
+    renderQuestionAnswerHistogram(Number(select.value), attempts);
+  }
+}
+
+function renderQuestionAnswerHistogram(questionId, attempts) {
+  const rows = [];
+  attempts.forEach(attempt => {
+    (attempt.answers || []).forEach(ans => {
+      if (Number(ans.question_id) === Number(questionId)) {
+        rows.push(ans.selected_text || '(blank)');
+      }
+    });
+  });
+
+  const counts = {};
+  rows.forEach(r => { counts[r] = (counts[r] || 0) + 1; });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+  const max = Math.max(1, ...entries.map(([, c]) => c));
+  const root = document.getElementById('questionHistogram');
+  root.innerHTML = '';
+
+  if (!entries.length) {
+    root.textContent = 'No response data yet for this question.';
+    return;
+  }
+
+  entries.forEach(([answer, count]) => {
+    const width = (count / max) * 100;
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `
+      <div class="bar-label">${answer} — ${count}</div>
+      <div class="bar"><div class="fill" style="width:${width}%"></div></div>
+    `;
+    root.appendChild(row);
+  });
 }
 
 function renderHistogram(attempts) {
